@@ -100,6 +100,7 @@
         import * as THREE from 'three';
         import { VRButton } from 'three/addons/webxr/VRButton.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
         try {
             // --- Configuration ---
@@ -107,6 +108,8 @@
                 wireLength: 10,
                 wireRadius: 0.05,
                 pulseRadius: 0.15,
+                moveSpeed: 3.0,
+                turnSpeed: 2.0,
                 colors: {
                     wireNormal: 0x004400,
                     wireActive: 0x00ff00,
@@ -115,6 +118,11 @@
                     background: 0x050505
                 }
             };
+
+            // --- Globals for Locomotion ---
+            let controller1, controller2;
+            let controllerGrip1, controllerGrip2;
+            const keyStates = {};
 
             // --- Synthetic Signal Data ---
             const signalData = [
@@ -139,8 +147,14 @@
             scene.background = new THREE.Color(CONFIG.colors.background);
             scene.fog = new THREE.FogExp2(CONFIG.colors.background, 0.02);
 
+            // --- Player Rig ---
+            const player = new THREE.Group();
+            scene.add(player);
+            player.position.set(0, 0, 6); // Start user back a bit
+
             const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
-            camera.position.set(0, 3, 6);
+            camera.position.set(0, 1.6, 0); // Default eye height
+            player.add(camera);
 
             const renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -150,8 +164,25 @@
 
             document.body.appendChild(VRButton.createButton(renderer));
 
+            // --- Controllers ---
+            controller1 = renderer.xr.getController(0);
+            controller2 = renderer.xr.getController(1);
+            player.add(controller1);
+            player.add(controller2);
+
+            const controllerModelFactory = new XRControllerModelFactory();
+
+            controllerGrip1 = renderer.xr.getControllerGrip(0);
+            controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
+            player.add(controllerGrip1);
+
+            controllerGrip2 = renderer.xr.getControllerGrip(1);
+            controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
+            player.add(controllerGrip2);
+
+
             const controls = new OrbitControls(camera, renderer.domElement);
-            controls.target.set(0, 0, 0);
+            controls.target.set(0, 1.6, -2); // Look slightly down/forward relative to rig
             controls.update();
 
             // Lights
@@ -416,6 +447,66 @@
                 slider.value = state.currentTime;
             }
 
+            // --- Locomotion Logic ---
+            window.addEventListener('keydown', (e) => { keyStates[e.code] = true; });
+            window.addEventListener('keyup', (e) => { keyStates[e.code] = false; });
+
+            function handleLocomotion(dt) {
+                // 1. Desktop WASD
+                const moveVector = new THREE.Vector3(0, 0, 0);
+                if (keyStates['KeyW']) moveVector.z -= 1;
+                if (keyStates['KeyS']) moveVector.z += 1;
+                if (keyStates['KeyA']) moveVector.x -= 1;
+                if (keyStates['KeyD']) moveVector.x += 1;
+
+                if (moveVector.lengthSq() > 0) {
+                    moveVector.normalize().multiplyScalar(CONFIG.moveSpeed * dt);
+                    // Move relative to camera direction (projected on XZ plane)
+                    const tempCamDir = new THREE.Vector3();
+                    camera.getWorldDirection(tempCamDir);
+                    tempCamDir.y = 0; tempCamDir.normalize();
+                    const tempCamRight = new THREE.Vector3();
+                    tempCamRight.crossVectors(tempCamDir, new THREE.Vector3(0, 1, 0));
+
+                    player.position.addScaledVector(tempCamDir, -moveVector.z);
+                    player.position.addScaledVector(tempCamRight, moveVector.x);
+                }
+
+                // 2. VR Locomotion (Quest)
+                [controller1, controller2].forEach((controller) => {
+                    const inputSource = controller.inputSource;
+                    if (inputSource && inputSource.gamepad) {
+                        const axes = inputSource.gamepad.axes;
+                        // Typically axes[2] = stick X, axes[3] = stick Y (Quest)
+                        if (axes.length >= 4) {
+                            if (inputSource.handedness === 'left') {
+                                // Move (Left Stick)
+                                const dx = axes[2];
+                                const dy = axes[3]; // Up is -1 usually
+
+                                if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
+                                    const tempCamDir = new THREE.Vector3();
+                                    camera.getWorldDirection(tempCamDir);
+                                    tempCamDir.y = 0; tempCamDir.normalize();
+                                    const tempCamRight = new THREE.Vector3();
+                                    tempCamRight.crossVectors(tempCamDir, new THREE.Vector3(0, 1, 0));
+
+                                    player.position.addScaledVector(tempCamRight, dx * CONFIG.moveSpeed * dt);
+                                    player.position.addScaledVector(tempCamDir, dy * CONFIG.moveSpeed * dt);
+                                }
+
+                            } else if (inputSource.handedness === 'right') {
+                                // Turn (Right Stick X)
+                                const turn = axes[2];
+                                if (Math.abs(turn) > 0.2) {
+                                    player.rotation.y -= turn * CONFIG.turnSpeed * dt;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
             // --- Main Loop ---
             const clock = new THREE.Clock();
 
@@ -427,6 +518,8 @@
                     if (state.currentTime > MAX_TIME) state.currentTime = 0;
                     updateUI();
                 }
+
+                handleLocomotion(dt);
 
                 updateScene(state.currentTime);
                 // Pulse wobble
