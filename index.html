@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VR Time-Travel Circuit Debugger</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #ui-container {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            max-width: 600px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 15px;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            border: 1px solid #333;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.2);
+            z-index: 100;
+            /* Ensure UI is above canvas */
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        #timeline {
+            flex-grow: 1;
+            cursor: pointer;
+            accent-color: #0f0;
+        }
+
+        button {
+            background: #0f0;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            color: #000;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #00cc00;
+        }
+
+        .label {
+            font-size: 0.9em;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        #time-display {
+            font-family: monospace;
+            font-size: 1.2em;
+            color: #0f0;
+            min-width: 60px;
+            text-align: right;
+        }
+    </style>
+    <!-- Import Map for Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <div id="ui-container">
+        <div class="label">Time-Travel Circuit Debugger</div>
+        <div class="controls">
+            <button id="play-btn">PLAY</button>
+            <input type="range" id="timeline" min="0" max="100" value="0" step="0.1">
+            <span id="time-display">T: 0.0</span>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { VRButton } from 'three/addons/webxr/VRButton.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        try {
+            // --- Configuration ---
+            const CONFIG = {
+                wireLength: 10,
+                wireRadius: 0.05,
+                pulseRadius: 0.15,
+                colors: {
+                    wireNormal: 0x004400,
+                    wireActive: 0x00ff00,
+                    wireFault: 0xff0000,
+                    pulse: 0x00ffff,
+                    background: 0x050505
+                }
+            };
+
+            // --- Synthetic Signal Data ---
+            const signalData = [
+                { time: 0, position: -4, fault: false },
+                { time: 2, position: -2, fault: false },
+                { time: 4, position: 0, fault: false },
+                { time: 5, position: 0, fault: true },
+                { time: 7, position: 2, fault: true },
+                { time: 9, position: 4, fault: false }
+            ];
+            const MAX_TIME = 9;
+
+            // --- App State ---
+            let state = {
+                currentTime: 0,
+                isPlaying: false,
+                playbackSpeed: 2.0
+            };
+
+            // --- Scene Setup ---
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(CONFIG.colors.background);
+            scene.fog = new THREE.FogExp2(CONFIG.colors.background, 0.02);
+
+            const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 3, 6);
+
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true; // Enable shadows
+            renderer.xr.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            document.body.appendChild(VRButton.createButton(renderer));
+
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.set(0, 0, 0);
+            controls.update();
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0x404040, 2);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 3);
+            dirLight.position.set(5, 10, 7);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // --- Circuit Group ---
+            const circuitGroup = new THREE.Group();
+            scene.add(circuitGroup);
+
+            // --- Component Factories ---
+
+            function createResistor(position) {
+                const group = new THREE.Group();
+                group.position.copy(position);
+
+                const materialBody = new THREE.MeshStandardMaterial({ color: 0xD2B48C, roughness: 0.4 }); // Beige
+                const materialLead = new THREE.MeshStandardMaterial({ color: 0xAAAAAA, metalness: 0.8, roughness: 0.2 }); // Metal
+
+                // Color Bands
+                const bandMat1 = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // Brown
+                const bandMat2 = new THREE.MeshStandardMaterial({ color: 0x000000 }); // Black
+                const bandMat3 = new THREE.MeshStandardMaterial({ color: 0xFF0000 }); // Red
+                const bandMat4 = new THREE.MeshStandardMaterial({ color: 0xD4AF37, metalness: 0.6 }); // Gold
+
+                // Main Body
+                const bodyGeo = new THREE.CylinderGeometry(0.25, 0.25, 1.2, 16);
+                bodyGeo.rotateZ(Math.PI / 2); // Corrected from .rotation.z
+                const body = new THREE.Mesh(bodyGeo, materialBody);
+                body.castShadow = true;
+                group.add(body);
+
+                // Leads
+                const leadGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.8, 8);
+                leadGeo.rotateZ(Math.PI / 2); // Corrected from .rotation.z
+
+                const leadL = new THREE.Mesh(leadGeo, materialLead);
+                leadL.position.x = -1.0;
+                group.add(leadL);
+
+                const leadR = new THREE.Mesh(leadGeo, materialLead);
+                leadR.position.x = 1.0;
+                group.add(leadR);
+
+                // Bands
+                const bandGeo = new THREE.CylinderGeometry(0.26, 0.26, 0.1, 16);
+                bandGeo.rotateZ(Math.PI / 2); // Corrected from .rotation.z
+
+                const b1 = new THREE.Mesh(bandGeo, bandMat1); b1.position.x = -0.4; group.add(b1);
+                const b2 = new THREE.Mesh(bandGeo, bandMat2); b2.position.x = -0.15; group.add(b2);
+                const b3 = new THREE.Mesh(bandGeo, bandMat3); b3.position.x = 0.1; group.add(b3);
+                const b4 = new THREE.Mesh(bandGeo, bandMat4); b4.position.x = 0.4; group.add(b4);
+
+                return group;
+            }
+
+            function createCapacitor(position) {
+                const group = new THREE.Group();
+                group.position.copy(position);
+
+                const materialBody = new THREE.MeshStandardMaterial({ color: 0x1034A6, roughness: 0.3 }); // Dark Blue
+                const materialLead = new THREE.MeshStandardMaterial({ color: 0xAAAAAA, metalness: 0.8, roughness: 0.2 });
+
+                // Body
+                const bodyGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.8, 16);
+                const body = new THREE.Mesh(bodyGeo, materialBody);
+                body.position.y = 0.4; // Sit on the 'wire' line
+                body.castShadow = true;
+                group.add(body);
+
+                // Leads (Vertical down to wire)
+                const leadGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.6, 8);
+                const leadL = new THREE.Mesh(leadGeo, materialLead);
+                leadL.position.set(-0.15, 0.1, 0); // Offset from center
+                group.add(leadL);
+
+                const leadR = new THREE.Mesh(leadGeo, materialLead);
+                leadR.position.set(0.15, 0.1, 0);
+                group.add(leadR);
+
+                return group;
+            }
+
+            function createIC(position) {
+                const group = new THREE.Group();
+                group.position.copy(position);
+
+                const materialBody = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.7 }); // Black chip
+                const materialPin = new THREE.MeshStandardMaterial({ color: 0xCCCCCC, metalness: 0.7, roughness: 0.3 });
+
+                // Body
+                const bodyGeo = new THREE.BoxGeometry(1.2, 0.3, 0.8);
+                const body = new THREE.Mesh(bodyGeo, materialBody);
+                body.castShadow = true;
+                group.add(body);
+
+                // Pins
+                const pinGeo = new THREE.BoxGeometry(0.1, 0.1, 0.3);
+                for (let i = 0; i < 4; i++) {
+                    // Top side (z+)
+                    const p1 = new THREE.Mesh(pinGeo, materialPin);
+                    p1.position.set(-0.45 + i * 0.3, -0.1, 0.45);
+                    group.add(p1);
+
+                    // Bottom side (z-)
+                    const p2 = new THREE.Mesh(pinGeo, materialPin);
+                    p2.position.set(-0.45 + i * 0.3, -0.1, -0.45);
+                    group.add(p2);
+                }
+
+                return group;
+            }
+
+            function createLED(position, colorHex = 0xff0000) {
+                const group = new THREE.Group();
+                group.position.copy(position);
+
+                const materialBulb = new THREE.MeshStandardMaterial({
+                    color: colorHex,
+                    emissive: colorHex,
+                    emissiveIntensity: 0.05,
+                    roughness: 0.1,
+                    transparent: true,
+                    opacity: 0.9
+                });
+                const materialBase = new THREE.MeshStandardMaterial({ color: 0x333333 });
+                const materialLead = new THREE.MeshStandardMaterial({ color: 0xAAAAAA, metalness: 0.8 });
+
+                // Bulb
+                const bulbGeo = new THREE.SphereGeometry(0.3, 32, 32, 0, Math.PI * 2, 0, Math.PI / 1.5); // Dome like
+                const bulb = new THREE.Mesh(bulbGeo, materialBulb);
+                bulb.position.y = 0.4;
+                bulb.scale.y = 1.2; // Elongate slightly
+                bulb.castShadow = true;
+                group.add(bulb);
+
+                // Base
+                const baseGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.1, 32);
+                const base = new THREE.Mesh(baseGeo, materialBase);
+                base.position.y = 0.25;
+                group.add(base);
+
+                // Leads
+                const leadGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.4, 8);
+                const leadL = new THREE.Mesh(leadGeo, materialLead);
+                leadL.position.set(-0.1, 0.0, 0);
+                group.add(leadL);
+
+                const leadR = new THREE.Mesh(leadGeo, materialLead);
+                leadR.position.set(0.1, 0.0, 0);
+                group.add(leadR);
+
+                return group;
+            }
+
+            // --- Circuit Generation ---
+
+            // 1. Main Wire backbone
+            const wireGeometry = new THREE.CylinderGeometry(CONFIG.wireRadius, CONFIG.wireRadius, CONFIG.wireLength, 32);
+            wireGeometry.rotateZ(Math.PI / 2); // Corrected from .rotation.z
+            const wireMaterial = new THREE.MeshStandardMaterial({
+                color: CONFIG.colors.wireNormal,
+                roughness: 0.4,
+                metalness: 0.6
+            });
+            const wire = new THREE.Mesh(wireGeometry, wireMaterial);
+            wire.receiveShadow = true;
+            circuitGroup.add(wire);
+
+            // 2. Place Components
+
+            // Input: Resistor at -4
+            circuitGroup.add(createResistor(new THREE.Vector3(-4, 0, 0)));
+
+            // Filter: Capacitor at -2
+            circuitGroup.add(createCapacitor(new THREE.Vector3(-2, 0, 0)));
+
+            // Logic: IC Chip at 0
+            circuitGroup.add(createIC(new THREE.Vector3(0, 0, 0)));
+
+            // Output: LED at 4
+            circuitGroup.add(createLED(new THREE.Vector3(4, 0, 0), 0xff0000)); // Red LED
+
+            // Extra Connector at 2
+            circuitGroup.add(createResistor(new THREE.Vector3(2, 0, 0)));
+
+
+            // 3. Signal Pulse
+            const pulseGeometry = new THREE.SphereGeometry(CONFIG.pulseRadius, 32, 32);
+            const pulseMaterial = new THREE.MeshStandardMaterial({
+                color: CONFIG.colors.pulse,
+                emissive: CONFIG.colors.pulse,
+                emissiveIntensity: 2.0,
+                toneMapped: false
+            });
+            const pulse = new THREE.Mesh(pulseGeometry, pulseMaterial);
+            circuitGroup.add(pulse);
+
+            const pulseLight = new THREE.PointLight(CONFIG.colors.pulse, 5, 4);
+            pulse.add(pulseLight);
+
+            // Grid (visual ground)
+            const gridHelper = new THREE.GridHelper(20, 20, 0x333333, 0x111111);
+            gridHelper.position.y = -1;
+            scene.add(gridHelper);
+
+            // --- Logic ---
+
+            function getInterpolatedSignal(time) {
+                const t = Math.max(0, Math.min(time, MAX_TIME));
+                let idx = 0;
+                while (idx < signalData.length - 1 && signalData[idx + 1].time < t) idx++;
+                const p0 = signalData[idx];
+                const p1 = signalData[idx + 1];
+                if (!p1) return p0;
+                const alpha = (t - p0.time) / (p1.time - p0.time);
+                const position = p0.position + (p1.position - p0.position) * alpha;
+                const isFault = p0.fault || (p1.fault && alpha > 0.5);
+                return { position, fault: isFault };
+            }
+
+            function updateScene(time) {
+                const signal = getInterpolatedSignal(time);
+                pulse.position.set(signal.position, 0, 0);
+
+                if (signal.fault) {
+                    wire.material.color.setHex(CONFIG.colors.wireFault);
+                    wire.material.emissive.setHex(0x550000);
+                } else {
+                    wire.material.color.setHex(CONFIG.colors.wireNormal);
+                    wire.material.emissive.setHex(0x000000);
+                }
+            }
+
+            // --- UI Handling ---
+            const slider = document.getElementById('timeline');
+            const timeDisplay = document.getElementById('time-display');
+            const playBtn = document.getElementById('play-btn');
+
+            slider.max = MAX_TIME;
+            slider.step = 0.01;
+
+            slider.addEventListener('input', (e) => {
+                state.currentTime = parseFloat(e.target.value);
+                state.isPlaying = false;
+                playBtn.textContent = "PLAY";
+                updateUI();
+            });
+
+            playBtn.addEventListener('click', () => {
+                state.isPlaying = !state.isPlaying;
+                playBtn.textContent = state.isPlaying ? "PAUSE" : "PLAY";
+            });
+
+            function updateUI() {
+                timeDisplay.textContent = `T: ${state.currentTime.toFixed(2)}`;
+                slider.value = state.currentTime;
+            }
+
+            // --- Main Loop ---
+            const clock = new THREE.Clock();
+
+            renderer.setAnimationLoop(() => {
+                const dt = clock.getDelta();
+
+                if (state.isPlaying) {
+                    state.currentTime += dt * state.playbackSpeed;
+                    if (state.currentTime > MAX_TIME) state.currentTime = 0;
+                    updateUI();
+                }
+
+                updateScene(state.currentTime);
+                // Pulse wobble
+                pulse.position.y = Math.sin(clock.elapsedTime * 10) * 0.05 + 0.1; // Float above components
+
+                renderer.render(scene, camera);
+            });
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            updateScene(0);
+
+        } catch (error) {
+            console.error("WebXR Error: ", error);
+            alert("Error: " + error.message);
+        }
+    </script>
+</body>
+
+</html>
