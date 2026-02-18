@@ -2,386 +2,228 @@
 <html lang="en">
 
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VR Time-Travel Circuit Debugger</title>
+    <meta charset="UTF-8">
+    <title>VR Circuit Debugger - AFrame Version</title>
 
-<style>
-body {
-    margin:0;
-    overflow:hidden;
-    background:black;
-    font-family:Arial;
-}
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 
-#ui-container{
-    position:absolute;
-    bottom:20px;
-    left:50%;
-    transform:translateX(-50%);
-    background:rgba(0,0,0,0.8);
-    padding:15px;
-    border-radius:10px;
-    color:white;
-}
-
-button{
-    background:#00ff00;
-    border:none;
-    padding:8px;
-    font-weight:bold;
-    cursor:pointer;
-}
-
-input{
-    width:300px;
-}
-</style>
-
-<script type="importmap">
-{
-"imports":{
-"three":"https://unpkg.com/three@0.160.0/build/three.module.js",
-"three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
-}
-}
-</script>
+    <style>
+        body {
+            margin: 0;
+        }
+    </style>
 
 </head>
 
 <body>
 
-<div id="ui-container">
-<button id="play-btn">PLAY</button>
-<br>
-<input id="timeline" type="range" min="0" max="9" step="0.01" value="0">
-<div id="time-display">T:0</div>
-</div>
+    <a-scene background="color: #050505">
 
-<script type="module">
+        <!-- ===================================== -->
+        <!-- PLAYER RIG (HEAD + CONTROLLERS)      -->
+        <!-- ===================================== -->
 
-import * as THREE from "three";
-import {VRButton} from "three/addons/webxr/VRButton.js";
-import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import {XRControllerModelFactory} from "three/addons/webxr/XRControllerModelFactory.js";
+        <a-entity id="rig" movement-controls="speed: 0.15">
 
-////////////////////////////////////////////////////////////
-// CONFIG
-////////////////////////////////////////////////////////////
-
-const CONFIG={
-wireLength:10,
-wireRadius:0.05,
-pulseRadius:0.15
-};
-
-////////////////////////////////////////////////////////////
-// STATE
-////////////////////////////////////////////////////////////
-
-let state={
-time:0,
-playing:false,
-speed:2
-};
-
-////////////////////////////////////////////////////////////
-// SCENE
-////////////////////////////////////////////////////////////
-
-const scene=new THREE.Scene();
-scene.background=new THREE.Color(0x050505);
-
-////////////////////////////////////////////////////////////
-// CAMERA + PLAYER RIG (CRITICAL FOR MOVEMENT)
-////////////////////////////////////////////////////////////
-
-const camera=new THREE.PerspectiveCamera(
-70,
-window.innerWidth/window.innerHeight,
-0.1,
-100
-);
-
-const player=new THREE.Group();
-player.position.set(0,1.6,6);
-player.add(camera);
-
-scene.add(player);
-
-////////////////////////////////////////////////////////////
-// RENDERER
-////////////////////////////////////////////////////////////
-
-const renderer=new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(window.innerWidth,window.innerHeight);
-renderer.xr.enabled=true;
-
-document.body.appendChild(renderer.domElement);
-document.body.appendChild(VRButton.createButton(renderer));
-
-////////////////////////////////////////////////////////////
-// DESKTOP ORBIT CONTROL (optional)
-////////////////////////////////////////////////////////////
-
-new OrbitControls(camera,renderer.domElement);
-
-////////////////////////////////////////////////////////////
-// LIGHT
-////////////////////////////////////////////////////////////
-
-scene.add(new THREE.AmbientLight(0xffffff,2));
-
-const dir=new THREE.DirectionalLight(0xffffff,3);
-dir.position.set(5,10,5);
-scene.add(dir);
-
-////////////////////////////////////////////////////////////
-// CIRCUIT
-////////////////////////////////////////////////////////////
-
-const circuit=new THREE.Group();
-scene.add(circuit);
-
-const wire=new THREE.Mesh(
-new THREE.CylinderGeometry(CONFIG.wireRadius,CONFIG.wireRadius,CONFIG.wireLength,32),
-new THREE.MeshStandardMaterial({color:0x004400})
-);
-
-wire.rotation.z=Math.PI/2;
-circuit.add(wire);
-
-////////////////////////////////////////////////////////////
-// RESISTOR
-////////////////////////////////////////////////////////////
-
-function createResistor(x){
-
-const g=new THREE.Group();
-
-const body=new THREE.Mesh(
-new THREE.CylinderGeometry(0.2,0.2,1,16),
-new THREE.MeshStandardMaterial({color:0xd2b48c})
-);
-
-body.rotation.z=Math.PI/2;
-
-const leadGeo=new THREE.CylinderGeometry(0.05,0.05,1);
-
-const lead1=new THREE.Mesh(
-leadGeo,
-new THREE.MeshStandardMaterial({color:0xaaaaaa})
-);
-
-lead1.rotation.z=Math.PI/2;
-lead1.position.x=-1;
-
-const lead2=lead1.clone();
-lead2.position.x=1;
-
-g.add(body,lead1,lead2);
-
-g.position.x=x;
-
-return g;
-}
-
-circuit.add(createResistor(-4));
-circuit.add(createResistor(2));
-
-////////////////////////////////////////////////////////////
-// LED
-////////////////////////////////////////////////////////////
-
-const ledMat=new THREE.MeshStandardMaterial({
-color:0xff0000,
-emissive:0xff0000,
-emissiveIntensity:0.1
-});
-
-const led=new THREE.Mesh(
-new THREE.SphereGeometry(0.3,32,32),
-ledMat
-);
-
-led.position.x=4;
-
-circuit.add(led);
-
-////////////////////////////////////////////////////////////
-// PULSE
-////////////////////////////////////////////////////////////
-
-const pulse=new THREE.Mesh(
-new THREE.SphereGeometry(CONFIG.pulseRadius,32,32),
-new THREE.MeshStandardMaterial({
-color:0x00ffff,
-emissive:0x00ffff,
-emissiveIntensity:2
-})
-);
-
-circuit.add(pulse);
-
-////////////////////////////////////////////////////////////
-// SIGNAL DATA
-////////////////////////////////////////////////////////////
-
-const signals=[
-{time:0,pos:-4,fault:false},
-{time:2,pos:-2,fault:false},
-{time:4,pos:0,fault:false},
-{time:5,pos:0,fault:true},
-{time:7,pos:2,fault:true},
-{time:9,pos:4,fault:false}
-];
-
-function getSignal(t){
-
-let i=0;
-
-while(i<signals.length-1 && signals[i+1].time<t)
-i++;
-
-const a=signals[i];
-const b=signals[i+1];
-
-if(!b)return a;
-
-const alpha=(t-a.time)/(b.time-a.time);
-
-return{
-pos:a.pos+(b.pos-a.pos)*alpha,
-fault:a.fault
-};
-
-}
-
-////////////////////////////////////////////////////////////
-// VR CONTROLLERS
-////////////////////////////////////////////////////////////
-
-const controller1=renderer.xr.getController(0);
-const controller2=renderer.xr.getController(1);
-
-scene.add(controller1,controller2);
-
-const factory=new XRControllerModelFactory();
-
-const grip1=renderer.xr.getControllerGrip(0);
-grip1.add(factory.createControllerModel(grip1));
-scene.add(grip1);
-
-const grip2=renderer.xr.getControllerGrip(1);
-grip2.add(factory.createControllerModel(grip2));
-scene.add(grip2);
-
-let leftPad=null;
-let rightPad=null;
-
-controller1.addEventListener("connected",e=>{
-leftPad=e.data.gamepad;
-});
-
-controller2.addEventListener("connected",e=>{
-rightPad=e.data.gamepad;
-});
-
-////////////////////////////////////////////////////////////
-// DESKTOP MOVEMENT
-////////////////////////////////////////////////////////////
-
-window.addEventListener("keydown",e=>{
-
-const speed=0.2;
-
-if(e.key=="w")player.position.z-=speed;
-if(e.key=="s")player.position.z+=speed;
-if(e.key=="a")player.position.x-=speed;
-if(e.key=="d")player.position.x+=speed;
-
-});
-
-////////////////////////////////////////////////////////////
-// UI
-////////////////////////////////////////////////////////////
-
-const slider=document.getElementById("timeline");
-const btn=document.getElementById("play-btn");
-const label=document.getElementById("time-display");
-
-slider.oninput=e=>state.time=parseFloat(e.target.value);
-
-btn.onclick=()=>state.playing=!state.playing;
-
-////////////////////////////////////////////////////////////
-// LOOP
-////////////////////////////////////////////////////////////
-
-const clock=new THREE.Clock();
-
-renderer.setAnimationLoop(()=>{
-
-const dt=clock.getDelta();
-
-if(state.playing){
-
-state.time+=dt*state.speed;
-
-if(state.time>9)state.time=0;
-
-slider.value=state.time;
-
-}
-
-label.innerHTML="T:"+state.time.toFixed(2);
-
-const sig=getSignal(state.time);
-
-pulse.position.x=sig.pos;
-
-wire.material.color.setHex(sig.fault?0xff0000:0x004400);
-
-led.material.emissiveIntensity=sig.fault?2:0.1;
-
-////////////////////////////////////////////////////////
-// JOYSTICK MOVEMENT
-////////////////////////////////////////////////////////
-
-const moveSpeed=0.05;
-const turnSpeed=0.03;
-
-if(leftPad){
-
-player.position.x+=leftPad.axes[2]*moveSpeed;
-player.position.z+=leftPad.axes[3]*moveSpeed;
-
-}
-
-if(rightPad){
-
-player.rotation.y-=rightPad.axes[2]*turnSpeed;
-
-}
-
-renderer.render(scene,camera);
-
-});
-
-////////////////////////////////////////////////////////////
-// RESIZE
-////////////////////////////////////////////////////////////
-
-window.onresize=()=>{
-
-camera.aspect=window.innerWidth/window.innerHeight;
-camera.updateProjectionMatrix();
-
-renderer.setSize(window.innerWidth,window.innerHeight);
-
-};
-
-</script>
-
+            <!-- CAMERA (Your head) -->
+            <a-entity camera position="0 1.6 5" look-controls>
+            </a-entity>
+
+            <!-- LEFT HAND -->
+            <a-entity id="leftController" meta-touch-controls="hand: left" laser-controls="hand: left"
+                raycaster="objects: .clickable; far: 20" line="color: cyan">
+            </a-entity>
+
+            <!-- RIGHT HAND -->
+            <a-entity id="rightController" meta-touch-controls="hand: right" laser-controls="hand: right"
+                raycaster="objects: .clickable; far: 20" line="color: magenta">
+            </a-entity>
+
+        </a-entity>
+
+        <!-- ===================================== -->
+        <!-- GROUND -->
+        <!-- ===================================== -->
+
+        <a-plane rotation="-90 0 0" width="50" height="50" color="#111">
+        </a-plane>
+
+        <!-- ===================================== -->
+        <!-- LIGHTING -->
+        <!-- ===================================== -->
+
+        <a-light type="ambient" intensity="0.6"></a-light>
+
+        <a-light type="directional" position="5 10 5" intensity="1">
+        </a-light>
+
+        <!-- ===================================== -->
+        <!-- CIRCUIT OBJECTS -->
+        <!-- ===================================== -->
+
+        <!-- Wire -->
+        <a-cylinder id="wire" class="clickable" position="0 1 -3" rotation="0 0 90" radius="0.05" height="10"
+            color="#004400">
+        </a-cylinder>
+
+        <!-- Resistor -->
+        <a-cylinder class="clickable" position="-3 1 -3" rotation="0 0 90" radius="0.2" height="1" color="#D2B48C">
+        </a-cylinder>
+
+        <!-- Capacitor -->
+        <a-cylinder class="clickable" position="-1 1 -3" radius="0.3" height="0.8" color="#1034A6">
+        </a-cylinder>
+
+        <!-- IC Chip -->
+        <a-box class="clickable" position="1 1 -3" depth="0.8" height="0.3" width="1.2" color="#111">
+        </a-box>
+
+        <!-- LED -->
+        <a-sphere id="led-sphere" class="clickable" position="3 1 -3" radius="0.3" color="#ff0000" emissive="#ff0000">
+        </a-sphere>
+
+        <!-- Signal Pulse -->
+        <a-sphere id="pulse" position="-4 1 -3" radius="0.15" color="#00ffff" emissive="#00ffff">
+        </a-sphere>
+
+        <!-- ===================================== -->
+        <!-- SKY -->
+        <!-- ===================================== -->
+
+        <a-sky color="#050505"></a-sky>
+
+    </a-scene>
+
+    <!-- ===================================== -->
+    <!-- MOVEMENT COMPONENT -->
+    <!-- ===================================== -->
+
+
+    <!-- ===================================== -->
+    <!-- UI OVERLAY -->
+    <!-- ===================================== -->
+    <div id="ui"
+        style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 300px; background: rgba(0,0,0,0.8); padding: 10px; border-radius: 8px; color: white; display: flex; flex-direction: column; gap: 5px; z-index: 100;">
+        <button id="playBtn"
+            style="background: lime; border: none; padding: 5px; cursor: pointer; font-weight: bold;">PLAY</button>
+        <input type="range" id="slider" min="0" max="9" step="0.01" value="0">
+        <div id="timeText" style="text-align: right; font-family: monospace;">T: 0.00</div>
+    </div>
+
+    <!-- ===================================== -->
+    <!-- LOGIC -->
+    <!-- ===================================== -->
+
+    <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.0.0/dist/aframe-extras.min.js"></script>
+
+    <script>
+        AFRAME.registerComponent('signal-debug', {
+            schema: {
+                playbackSpeed: { type: 'number', default: 2.0 }
+            },
+            init: function () {
+                // Config
+                this.signalData = [
+                    { time: 0, position: -4, fault: false },
+                    { time: 2, position: -2, fault: false },
+                    { time: 4, position: 0, fault: false },
+                    { time: 5, position: 0, fault: true },
+                    { time: 7, position: 2, fault: true },
+                    { time: 9, position: 4, fault: false }
+                ];
+                this.MAX_TIME = 9;
+
+                // State
+                this.time = 0;
+                this.isPlaying = false;
+
+                // References
+                this.pulse = document.querySelector('#pulse');
+                this.wire = document.querySelector('#wire');
+                this.led = document.querySelector('#led-sphere');
+
+                // UI
+                this.slider = document.querySelector('#slider');
+                this.playBtn = document.querySelector('#playBtn');
+                this.timeText = document.querySelector('#timeText');
+
+                // Events
+                this.playBtn.addEventListener('click', () => {
+                    this.isPlaying = !this.isPlaying;
+                    this.playBtn.innerText = this.isPlaying ? "PAUSE" : "PLAY";
+                });
+
+                this.slider.addEventListener('input', (e) => {
+                    this.time = parseFloat(e.target.value);
+                    this.isPlaying = false; // Pause when scrubbing
+                    this.playBtn.innerText = "PLAY";
+                    this.updateScene(this.time);
+                });
+            },
+
+            tick: function (t, dt) {
+                if (this.isPlaying) {
+                    this.time += (dt / 1000) * this.data.playbackSpeed;
+                    if (this.time > this.MAX_TIME) this.time = 0;
+
+                    // Update UI
+                    this.slider.value = this.time;
+                    this.timeText.innerText = "T: " + this.time.toFixed(2);
+
+                    this.updateScene(this.time);
+                }
+            },
+
+            updateScene: function (time) {
+                const signal = this.getSignal(time);
+
+                // Update Pulse Position
+                if (this.pulse) {
+                    this.pulse.object3D.position.x = signal.position;
+                    // Pulse wobble (using standard Three.js math)
+                    this.pulse.object3D.position.y = 1 + Math.sin(time * 5) * 0.05;
+                }
+
+                // Update Wire Color (Fault detection)
+                if (this.wire) {
+                    if (signal.fault) {
+                        this.wire.setAttribute('color', '#ff0000');
+                    } else {
+                        this.wire.setAttribute('color', '#004400');
+                    }
+                }
+
+                // Update LED Intensity
+                if (this.led) {
+                    if (signal.fault) {
+                        this.led.setAttribute('emissive-intensity', 2.0);
+                    } else {
+                        this.led.setAttribute('emissive-intensity', 0.1);
+                    }
+                }
+            },
+
+            getSignal: function (time) {
+                const t = Math.max(0, Math.min(time, this.MAX_TIME));
+                let idx = 0;
+                while (idx < this.signalData.length - 1 && this.signalData[idx + 1].time < t) idx++;
+
+                const p0 = this.signalData[idx];
+                const p1 = this.signalData[idx + 1];
+                if (!p1) return p0;
+
+                const alpha = (t - p0.time) / (p1.time - p0.time);
+
+                const position = p0.position + (p1.position - p0.position) * alpha;
+                const isFault = p0.fault || (p1.fault && alpha > 0.5);
+
+                return { position, fault: isFault };
+            }
+        });
+
+        // Attach component to scene
+        document.querySelector('a-scene').setAttribute('signal-debug', '');
+    </script>
 </body>
+
 </html>
